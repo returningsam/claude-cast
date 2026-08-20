@@ -4,6 +4,8 @@ import {
   streamSessionUsage,
   SessionMetadata,
 } from "./session-parser";
+import { calculateMessageCost, formatCost } from "./pricing";
+import { UsageMode } from "./usage-mode";
 
 /**
  * Headline "tokens" throughout this module means input + output — the
@@ -29,17 +31,24 @@ export interface TopSessionSummary {
   projectName: string;
   firstMessage: string;
   tokens: number;
+  /** API list-rate estimate; only meaningful in "api" display mode. */
+  cost: number;
 }
 
 export interface UsageStats {
   totalSessions: number;
   /** input + output; see workTokens. */
   totalTokens: number;
+  /** API list-rate estimate; only meaningful in "api" display mode. */
+  totalCost: number;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheCreationTokens: number;
-  sessionsByProject: Record<string, { count: number; tokens: number }>;
+  sessionsByProject: Record<
+    string,
+    { count: number; tokens: number; cost: number }
+  >;
   topSessions: TopSessionSummary[];
 }
 
@@ -47,14 +56,16 @@ export interface DailyStats {
   date: string;
   sessions: number;
   tokens: number;
+  /** API list-rate estimate; only meaningful in "api" display mode. */
+  cost: number;
 }
 
 // Cache keys are versioned against the shape of UsageStats. The v2/v1 pair held
 // `cost` fields; reusing those keys would deserialize stale objects whose
 // `tokens` are undefined and render as NaN until the TTL expired.
-const STATS_CACHE_KEY = "claudecast-stats-v3";
+const STATS_CACHE_KEY = "claudecast-stats-v4";
 const STATS_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-const TODAY_STATS_LOCALSTORAGE_KEY = "claudecast-today-stats-v2";
+const TODAY_STATS_LOCALSTORAGE_KEY = "claudecast-today-stats-v3";
 
 // In-memory cache for today's stats to prevent repeated disk reads
 // This is especially important for menu bar monitors that refresh frequently
@@ -207,7 +218,10 @@ export async function getDailyStats(days: number = 7): Promise<DailyStats[]> {
   const allSessions = await listAllSessions({ afterDate: startDate });
 
   // Per-day map: dateStr → { unique session ids, summed tokens }.
-  const dailyMap = new Map<string, { sessions: Set<string>; tokens: number }>();
+  const dailyMap = new Map<
+    string,
+    { sessions: Set<string>; tokens: number; cost: number }
+  >();
 
   for (const session of allSessions) {
     const usage = await streamSessionUsage(session.filePath, startDate, {
@@ -217,12 +231,13 @@ export async function getDailyStats(days: number = 7): Promise<DailyStats[]> {
     for (const [dateStr, msgs] of usage.dailyByDate) {
       let entry = dailyMap.get(dateStr);
       if (!entry) {
-        entry = { sessions: new Set<string>(), tokens: 0 };
+        entry = { sessions: new Set<string>(), tokens: 0, cost: 0 };
         dailyMap.set(dateStr, entry);
       }
       entry.sessions.add(session.id);
       for (const m of msgs) {
         entry.tokens += workTokens(m);
+        entry.cost += calculateMessageCost(m);
       }
     }
   }
@@ -237,6 +252,7 @@ export async function getDailyStats(days: number = 7): Promise<DailyStats[]> {
       date: dateStr,
       sessions: entry?.sessions.size || 0,
       tokens: entry?.tokens || 0,
+      cost: entry?.cost || 0,
     });
   }
 
@@ -259,14 +275,30 @@ async function calculateStatsWithUsage(
   let totalOutputTokens = 0;
   let totalCacheReadTokens = 0;
   let totalCacheCreationTokens = 0;
-  const sessionsByProject: Record<string, { count: number; tokens: number }> =
-    {};
+  let totalCostCents = 0;
+  const sessionsByProject: Record<
+    string,
+    { count: number; tokens: number; cost: number }
+  > = {};
+  const projectCostCents: Record<string, number> = {};
   const sessionTokens = new Map<string, number>();
+  const sessionCosts = new Map<string, number>();
 
   for (const session of sessions) {
     const usage = await streamSessionUsage(session.filePath, afterDate);
     const tokens = workTokens(usage);
     sessionTokens.set(session.id, tokens);
+
+    // Tier-aware: sum per-message costs rather than pricing a session rollup.
+    // Accumulated in integer hundredths of a cent to avoid float drift across
+    // thousands of sessions.
+    let cost = 0;
+    for (const m of usage.messages) {
+      cost += calculateMessageCost(m);
+    }
+    sessionCosts.set(session.id, cost);
+    const costCents = Math.round(cost * 10000);
+    totalCostCents += costCents;
 
     totalInputTokens += usage.inputTokens;
     totalOutputTokens += usage.outputTokens;
@@ -274,10 +306,16 @@ async function calculateStatsWithUsage(
     totalCacheCreationTokens += usage.cacheCreationTokens;
 
     if (!sessionsByProject[session.projectName]) {
-      sessionsByProject[session.projectName] = { count: 0, tokens: 0 };
+      sessionsByProject[session.projectName] = { count: 0, tokens: 0, cost: 0 };
+      projectCostCents[session.projectName] = 0;
     }
     sessionsByProject[session.projectName].count++;
     sessionsByProject[session.projectName].tokens += tokens;
+    projectCostCents[session.projectName] += costCents;
+  }
+
+  for (const projectName of Object.keys(sessionsByProject)) {
+    sessionsByProject[projectName].cost = projectCostCents[projectName] / 10000;
   }
 
   // Lightweight projection only. Never retain full SessionMetadata refs
@@ -288,6 +326,7 @@ async function calculateStatsWithUsage(
       projectName: s.projectName,
       firstMessage: s.firstMessage,
       tokens: sessionTokens.get(s.id) ?? 0,
+      cost: sessionCosts.get(s.id) ?? 0,
     }))
     .filter((s) => s.tokens > 0)
     .sort((a, b) => b.tokens - a.tokens)
@@ -296,6 +335,7 @@ async function calculateStatsWithUsage(
   return {
     totalSessions: sessions.length,
     totalTokens: totalInputTokens + totalOutputTokens,
+    totalCost: totalCostCents / 10000,
     totalInputTokens,
     totalOutputTokens,
     totalCacheReadTokens,
@@ -319,21 +359,27 @@ export function formatTokens(count: number): string {
  * Generate project breakdown table
  */
 export function generateProjectTable(
-  sessionsByProject: Record<string, { count: number; tokens: number }>,
+  sessionsByProject: Record<
+    string,
+    { count: number; tokens: number; cost: number }
+  >,
+  mode: UsageMode = "subscription",
 ): string {
+  const isApi = mode === "api";
   const sorted = Object.entries(sessionsByProject)
-    .sort(([, a], [, b]) => b.tokens - a.tokens)
+    .sort(([, a], [, b]) => (isApi ? b.cost - a.cost : b.tokens - a.tokens))
     .slice(0, 10);
 
   if (sorted.length === 0) {
     return "No project data available.";
   }
 
-  let table = "| Project | Sessions | Tokens |\n";
+  let table = `| Project | Sessions | ${isApi ? "Cost" : "Tokens"} |\n`;
   table += "|---------|----------|-------:|\n";
 
   for (const [project, stats] of sorted) {
-    table += `| ${project} | ${stats.count} | ${formatTokens(stats.tokens)} |\n`;
+    const value = isApi ? formatCost(stats.cost) : formatTokens(stats.tokens);
+    table += `| ${project} | ${stats.count} | ${value} |\n`;
   }
 
   return table;

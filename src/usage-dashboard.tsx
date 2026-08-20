@@ -21,6 +21,8 @@ import {
   SubscriptionUsageError,
   usageBar,
 } from "./lib/subscription-usage";
+import { formatCost } from "./lib/pricing";
+import { getUsageMode, UsageMode } from "./lib/usage-mode";
 
 type RangeKey = "today" | "week" | "month" | "all";
 
@@ -45,26 +47,31 @@ export default function UsageDashboard() {
   // ready, then swaps atomically.
   const [dailyRange, setDailyRange] = useState<RangeKey>("today");
   const [range, setRange] = useState<RangeKey>("today");
+  const mode = getUsageMode();
   const [usage, setUsage] = useState<SubscriptionUsage | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
 
   // Live subscription limits. Independent of the local-JSONL stats: a failure
   // here (no token, offline) hides the section but leaves the dashboard usable.
-  const loadUsage = useCallback((force = false) => {
-    getSubscriptionUsage(force)
-      .then((data) => {
-        setUsage(data);
-        setUsageError(null);
-      })
-      .catch((error: unknown) => {
-        setUsage(null);
-        setUsageError(
-          error instanceof SubscriptionUsageError
-            ? error.message
-            : "Could not load subscription limits.",
-        );
-      });
-  }, []);
+  const loadUsage = useCallback(
+    (force = false) => {
+      if (mode === "api") return;
+      getSubscriptionUsage(force)
+        .then((data) => {
+          setUsage(data);
+          setUsageError(null);
+        })
+        .catch((error: unknown) => {
+          setUsage(null);
+          setUsageError(
+            error instanceof SubscriptionUsageError
+              ? error.message
+              : "Could not load subscription limits.",
+          );
+        });
+    },
+    [mode],
+  );
 
   useEffect(() => {
     loadUsage();
@@ -106,14 +113,15 @@ export default function UsageDashboard() {
     // the current `range`. During a range switch the chart keeps showing the
     // previous range's correct view; when the new fetch lands, dailyRange and
     // range realign and the chart updates cleanly.
-    const { points, header } = aggregateForChart(daily, dailyRange);
+    const { points, header } = aggregateForChart(daily, dailyRange, mode);
     if (points.length === 0) return null;
     const path = renderBarChartToFile(points, {
-      valueFormatter: (n) => (n > 0 ? formatTokens(n) : ""),
+      valueFormatter: (n) =>
+        n > 0 ? (mode === "api" ? formatCost(n) : formatTokens(n)) : "",
     });
     const total = points.reduce((s, p) => s + p.value, 0);
     return { path, header, total };
-  }, [daily, dailyRange]);
+  }, [daily, dailyRange, mode]);
 
   const stats = statsByRange[range];
 
@@ -124,6 +132,7 @@ export default function UsageDashboard() {
     statsLoading,
     usage,
     usageError,
+    mode,
   });
 
   return (
@@ -131,17 +140,19 @@ export default function UsageDashboard() {
       isLoading={statsLoading}
       markdown={markdown}
       navigationTitle={`Usage: ${RANGE_LABEL[range]}`}
-      metadata={<Sidebar stats={stats} usage={usage} />}
+      metadata={<Sidebar stats={stats} usage={usage} mode={mode} />}
       actions={
         <ActionPanel>
-          <ActionPanel.Section title="Subscription">
-            <Action
-              title="Refresh Limits"
-              icon={Icon.ArrowClockwise}
-              shortcut={{ modifiers: ["cmd"], key: "r" }}
-              onAction={() => loadUsage(true)}
-            />
-          </ActionPanel.Section>
+          {mode !== "api" && (
+            <ActionPanel.Section title="Subscription">
+              <Action
+                title="Refresh Limits"
+                icon={Icon.ArrowClockwise}
+                shortcut={{ modifiers: ["cmd"], key: "r" }}
+                onAction={() => loadUsage(true)}
+              />
+            </ActionPanel.Section>
+          )}
           <ActionPanel.Section title="Time Range">
             <Action
               title="Today"
@@ -173,38 +184,47 @@ export default function UsageDashboard() {
 function Sidebar({
   stats,
   usage,
+  mode,
 }: {
   stats: UsageStats | undefined;
   usage: SubscriptionUsage | null;
+  mode: UsageMode;
 }) {
+  const isApi = mode === "api";
   // Limits resolve from one HTTP call; the local stats need a full JSONL scan.
   // Render the limits alone rather than holding them behind the slower half.
   if (!stats) {
     return (
       <Detail.Metadata>
-        {usage?.buckets.map((bucket) => (
-          <Detail.Metadata.Label
-            key={bucket.key}
-            title={bucket.label}
-            text={formatPercent(bucket.percent)}
-            icon={{
-              source: Icon.CircleProgress100,
-              tintColor: percentColor(bucket.percent),
-            }}
-          />
-        ))}
+        {!isApi &&
+          usage?.buckets.map((bucket) => (
+            <Detail.Metadata.Label
+              key={bucket.key}
+              title={bucket.label}
+              text={formatPercent(bucket.percent)}
+              icon={{
+                source: Icon.CircleProgress100,
+                tintColor: percentColor(bucket.percent),
+              }}
+            />
+          ))}
         <Detail.Metadata.Label title="Loading usage..." text="" />
       </Detail.Metadata>
     );
   }
 
   const topProjects = Object.entries(stats.sessionsByProject)
-    .sort(([, a], [, b]) => b.tokens - a.tokens)
+    .sort(([, a], [, b]) => (isApi ? b.cost - a.cost : b.tokens - a.tokens))
     .slice(0, 5);
+
+  // topSessions is pre-sorted by tokens; re-rank when costs are on display.
+  const topSession = isApi
+    ? [...stats.topSessions].sort((a, b) => b.cost - a.cost)[0]
+    : stats.topSessions[0];
 
   return (
     <Detail.Metadata>
-      {usage && usage.buckets.length > 0 && (
+      {!isApi && usage && usage.buckets.length > 0 && (
         <>
           {usage.buckets.map((bucket) => (
             <Detail.Metadata.Label
@@ -226,8 +246,10 @@ function Sidebar({
       )}
 
       <Detail.Metadata.Label
-        title="Tokens"
-        text={formatTokens(stats.totalTokens)}
+        title={isApi ? "API-Equivalent" : "Tokens"}
+        text={
+          isApi ? formatCost(stats.totalCost) : formatTokens(stats.totalTokens)
+        }
         icon={{ source: Icon.Coin, tintColor: Color.Yellow }}
       />
       <Detail.Metadata.Label
@@ -237,11 +259,19 @@ function Sidebar({
       />
       <Detail.Metadata.Label
         title="Avg / Session"
-        text={formatTokens(
-          stats.totalSessions > 0
-            ? Math.round(stats.totalTokens / stats.totalSessions)
-            : 0,
-        )}
+        text={
+          isApi
+            ? formatCost(
+                stats.totalSessions > 0
+                  ? stats.totalCost / stats.totalSessions
+                  : 0,
+              )
+            : formatTokens(
+                stats.totalSessions > 0
+                  ? Math.round(stats.totalTokens / stats.totalSessions)
+                  : 0,
+              )
+        }
       />
 
       <Detail.Metadata.Separator />
@@ -270,7 +300,7 @@ function Sidebar({
             {topProjects.map(([project, data]) => (
               <Detail.Metadata.TagList.Item
                 key={project}
-                text={`${project} (${formatTokens(data.tokens)})`}
+                text={`${project} (${isApi ? formatCost(data.cost) : formatTokens(data.tokens)})`}
                 color={Color.Blue}
               />
             ))}
@@ -278,12 +308,12 @@ function Sidebar({
         </>
       )}
 
-      {stats.topSessions.length > 0 && (
+      {topSession && (
         <>
           <Detail.Metadata.Separator />
           <Detail.Metadata.Label
-            title="Largest Session"
-            text={`${formatTokens(stats.topSessions[0].tokens)} in ${stats.topSessions[0].projectName}`}
+            title={isApi ? "Most Expensive Session" : "Largest Session"}
+            text={`${isApi ? formatCost(topSession.cost) : formatTokens(topSession.tokens)} in ${topSession.projectName}`}
             icon={{ source: Icon.BarChart, tintColor: Color.Orange }}
           />
         </>
@@ -314,12 +344,15 @@ function daysForRange(range: RangeKey): number {
 function aggregateForChart(
   daily: DailyStats[],
   range: RangeKey,
+  mode: UsageMode,
 ): { points: { label: string; value: number }[]; header: string } {
+  const valueOf = (d: DailyStats) => (mode === "api" ? d.cost : d.tokens);
+  const unit = mode === "api" ? "Cost" : "Tokens";
   if (range === "month") {
     const points: { label: string; value: number }[] = [];
     for (let i = 0; i < daily.length; i += 7) {
       const chunk = daily.slice(i, i + 7);
-      const total = chunk.reduce((s, d) => s + d.tokens, 0);
+      const total = chunk.reduce((s, d) => s + valueOf(d), 0);
       const start = chunk[0].date.slice(5);
       const end = chunk[chunk.length - 1].date.slice(5);
       points.push({
@@ -327,14 +360,14 @@ function aggregateForChart(
         value: total,
       });
     }
-    return { points, header: "Weekly Tokens (Last 30 Days)" };
+    return { points, header: `Weekly ${unit} (Last 30 Days)` };
   }
 
   if (range === "all") {
     const monthMap = new Map<string, number>();
     for (const d of daily) {
       const monthKey = d.date.slice(0, 7); // YYYY-MM
-      monthMap.set(monthKey, (monthMap.get(monthKey) || 0) + d.tokens);
+      monthMap.set(monthKey, (monthMap.get(monthKey) || 0) + valueOf(d));
     }
     const sorted = Array.from(monthMap.entries()).sort();
     const recent = sorted.slice(-12);
@@ -361,15 +394,15 @@ function aggregateForChart(
     });
     const header =
       recent.length > 0
-        ? `Monthly Tokens (Last ${recent.length} Months)`
-        : "Monthly Tokens";
+        ? `Monthly ${unit} (Last ${recent.length} Months)`
+        : `Monthly ${unit}`;
     return { points, header };
   }
 
   // today / week: one bar per day, MM-DD label.
   return {
-    points: daily.map((d) => ({ label: d.date.slice(5), value: d.tokens })),
-    header: `Daily Tokens (Last ${daily.length} Days)`,
+    points: daily.map((d) => ({ label: d.date.slice(5), value: valueOf(d) })),
+    header: `Daily ${unit} (Last ${daily.length} Days)`,
   };
 }
 
@@ -443,18 +476,24 @@ function buildMarkdown(args: {
   statsLoading: boolean;
   usage: SubscriptionUsage | null;
   usageError: string | null;
+  mode: UsageMode;
 }): string {
-  const { range, stats, chart, statsLoading, usage, usageError } = args;
+  const { range, stats, chart, statsLoading, usage, usageError, mode } = args;
+  const isApi = mode === "api";
 
   let md = `# Claude Code Usage: ${RANGE_LABEL[range]}\n\n`;
-  md += buildUsageSection(usage, usageError);
+  // API mode is explicitly a cost-estimate view; the live limits section has no
+  // dollar equivalent, so it is omitted rather than shown in mixed units.
+  if (!isApi) md += buildUsageSection(usage, usageError);
 
   // Range-adapted chart. The aggregator picks the right granularity (daily,
   // weekly, or monthly) so the X-axis stays readable regardless of window.
   if (chart) {
     md += `## ${chart.header}\n\n`;
     md += `![${chart.header}](file://${chart.path}?raycast-width=820)\n\n`;
-    md += `_Total: **${formatTokens(chart.total)}** tokens (input + output)._\n\n`;
+    md += isApi
+      ? `_Total: **${formatCost(chart.total)}** at API list rates — an estimate, not a bill._\n\n`
+      : `_Total: **${formatTokens(chart.total)}** tokens (input + output)._\n\n`;
   }
 
   if (!stats) {
@@ -467,25 +506,30 @@ function buildMarkdown(args: {
   // Project breakdown for the selected range.
   const projectKeys = Object.keys(stats.sessionsByProject);
   if (projectKeys.length > 0) {
-    md += `## Usage by Project (${RANGE_LABEL[range]})\n\n`;
-    md += generateProjectTable(stats.sessionsByProject);
+    md += `## ${isApi ? "Cost" : "Usage"} by Project (${RANGE_LABEL[range]})\n\n`;
+    md += generateProjectTable(stats.sessionsByProject, mode);
     md += `\n`;
   }
 
   // Top sessions for the selected range.
   if (stats.topSessions.length > 0) {
     md += `## Top Sessions (${RANGE_LABEL[range]})\n\n`;
-    md += `| # | Project | First Message | Tokens |\n`;
+    md += `| # | Project | First Message | ${isApi ? "Cost" : "Tokens"} |\n`;
     md += `|--:|---------|---------------|-------:|\n`;
-    stats.topSessions.slice(0, 10).forEach((s, i) => {
+    const ranked = isApi
+      ? [...stats.topSessions].sort((a, b) => b.cost - a.cost)
+      : stats.topSessions;
+    ranked.slice(0, 10).forEach((s, i) => {
       const preview = sessionPreview(s);
-      md += `| ${i + 1} | ${escapeMd(s.projectName)} | ${escapeMd(preview)} | ${formatTokens(s.tokens)} |\n`;
+      md += `| ${i + 1} | ${escapeMd(s.projectName)} | ${escapeMd(preview)} | ${isApi ? formatCost(s.cost) : formatTokens(s.tokens)} |\n`;
     });
     md += `\n`;
   }
 
   md += `\n---\n\n`;
-  md += `_Tip: ⌘K to switch range, ⌘R to refresh limits. Token counts below are input + output; cache totals are in the sidebar._\n`;
+  md += isApi
+    ? `_Tip: ⌘K to switch range. Figures are API list-rate estimates — switch to Subscription usage in preferences (⌘,) for real limits._\n`
+    : `_Tip: ⌘K to switch range, ⌘R to refresh limits. Token counts are input + output; cache totals are in the sidebar._\n`;
 
   return md;
 }

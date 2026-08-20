@@ -221,6 +221,24 @@
   ],
   "preferences": [
     {
+      "name": "usageMode",
+      "title": "Usage Display",
+      "description": "Subscription shows live 5h/7d limit utilization and token counts — what a Claude subscription actually meters. API shows list-rate dollar estimates of what the same usage would have cost pay-as-you-go, and hides the limits section.",
+      "type": "dropdown",
+      "default": "subscription",
+      "required": false,
+      "data": [
+        {
+          "title": "Subscription usage (%)",
+          "value": "subscription"
+        },
+        {
+          "title": "API usage ($)",
+          "value": "api"
+        }
+      ]
+    },
+    {
       "name": "defaultModel",
       "title": "Default Model",
       "description": "The default Claude model to use for prompts",
@@ -334,7 +352,7 @@
     "fix-lint": "ray lint --fix",
     "lint": "ray lint",
     "publish": "npx @raycast/api@latest publish",
-    "test": "esbuild src/lib/subscription-usage.ts --bundle --format=esm --platform=node --alias:@raycast/api=./test/stub-raycast.js --outfile=test/bundle.mjs --log-level=warning && node test/parser.test.mjs"
+    "test": "esbuild src/lib/subscription-usage.ts --bundle --format=esm --platform=node --alias:@raycast/api=./test/stub-raycast.js --outfile=test/bundle.mjs --log-level=warning && esbuild src/lib/pricing.ts --bundle --format=esm --platform=node --outfile=test/pricing.mjs --log-level=warning && node test/parser.test.mjs"
   },
   "overrides": {
     "@types/react": "18.2.79"

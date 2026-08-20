@@ -15,15 +15,22 @@
 
 ## About this fork
 
-Fork of [qazi0/claude-cast](https://github.com/qazi0/claude-cast) that reports
-**subscription usage instead of dollar costs**.
+Fork of [qazi0/claude-cast](https://github.com/qazi0/claude-cast) that can report
+**subscription usage, not just dollar costs**.
 
-Upstream priced local token counts at hardcoded API list rates — what the usage
-would have cost pay-as-you-go, which is not what a subscription bills. This fork
-drops that pricing table entirely and instead fetches live limit utilization
-(the rolling 5h / 7d windows behind Claude Code's `/usage`), shows historical
-stats in tokens, and puts the 5h percentage in the menu bar. The only dollar
-figure left is extra-usage credits, and only once actually spent.
+Upstream reported only API list-rate dollar estimates — what the usage would
+have cost pay-as-you-go, which is not what a subscription bills. This fork adds
+a **Usage Display** preference with two modes:
+
+- **Subscription usage (%)** — default. Live utilization of the rolling 5h / 7d
+  windows behind Claude Code's `/usage`, historical stats in tokens, and the 5h
+  percentage in the menu bar. Extra-usage credits appear only once actually
+  spent, since that is the one figure genuinely charged.
+- **API usage ($)** — upstream's behavior. List-rate cost estimates throughout,
+  with the limits section hidden.
+
+The modes are not two views of one number: limits are live and account-wide with
+no history, costs are historical and per-project with no live equivalent.
 
 ---
 
@@ -135,14 +142,15 @@ One keystroke to continue your last Claude Code session. No UI - just launches d
 Real-time Claude Code status in your menu bar.
 
 - Active session indicator
-- Title shows how much of the rolling 5-hour limit is used, falling back to
-  today's token count when limits are unavailable
+- Title shows how much of the rolling 5-hour limit is used — or today's cost in
+  API mode — falling back to today's token count when limits are unavailable
 - Every limit window listed with its reset time, colored by headroom
 - Today's session and token counts
 - Quick access to all commands
 
 ### Usage Dashboard
 Live subscription limits above historical token usage, with an SVG bar chart.
+Switches to list-rate cost estimates in API mode.
 
 - Subscription limits section: every rolling window with a usage bar and reset time
 - Range tabs adapt the chart granularity: Today/Week (daily bars), Month (weekly), All Time (up to 12 monthly bars)
@@ -198,6 +206,7 @@ Some features (Ask Claude Code, Transform Selection, Git Actions) require an OAu
 
 Open Raycast preferences and configure ClaudeCast:
 
+- **Usage Display**: Subscription usage (%) or API usage ($). Controls the Usage Dashboard and the menu bar together.
 - **Default Model**: Choose between Sonnet (balanced), Opus (most capable), or Haiku (fastest)
 - **Terminal Application**: Pick from Terminal, iTerm, Warp, kitty, Ghostty, or cmux. Each launcher uses the terminal's native AppleScript or CLI for reliable launches.
 - **Open In**: Choose New Window or New Tab. Honored by Terminal, iTerm, kitty, Ghostty, and cmux. Warp always opens a new window.

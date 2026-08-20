@@ -8,6 +8,8 @@
 /* eslint-disable @typescript-eslint/ban-types */
 
 type ExtensionPreferences = {
+  /** Usage Display - Subscription shows live 5h/7d limit utilization and token counts — what a Claude subscription actually meters. API shows list-rate dollar estimates of what the same usage would have cost pay-as-you-go, and hides the limits section. */
+  "usageMode": "subscription" | "api",
   /** Default Model - The default Claude model to use for prompts */
   "defaultModel": "sonnet" | "opus" | "haiku",
   /** Terminal Application - Choose which terminal opens new Claude Code sessions. Each app uses its native AppleScript or CLI so launches are reliable across macOS updates. */

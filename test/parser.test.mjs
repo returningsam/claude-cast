@@ -142,5 +142,62 @@ console.log(
 );
 console.log("  ^ if the live response looks like this, the scale assumption is wrong");
 
+
+// --- Pricing (api display mode) ---
+// Restored from upstream when the API/subscription toggle was added; upstream
+// never covered it, and a mis-ordered match rule silently misprices a model.
+console.log("\nPricing");
+const { calculateMessageCost, formatCost } = await import("./pricing.mjs");
+
+const msg = (over = {}) => ({
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  ...over,
+});
+
+const near = (a, b) => Math.abs(a - b) < 1e-9;
+
+check(
+  "opus-4-7 uses the $5/$25 tier, not the older $15/$75 row",
+  near(
+    calculateMessageCost(
+      msg({ inputTokens: 1e6, outputTokens: 1e6, model: "claude-opus-4-7" }),
+    ),
+    30,
+  ),
+  `got ${calculateMessageCost(msg({ inputTokens: 1e6, outputTokens: 1e6, model: "claude-opus-4-7" }))}`,
+);
+check(
+  "bare opus falls back to $15/$75",
+  near(calculateMessageCost(msg({ inputTokens: 1e6, model: "claude-opus-4" })), 15),
+);
+check(
+  "sonnet under 200K input bills at the base rate",
+  near(calculateMessageCost(msg({ inputTokens: 1e5, model: "claude-sonnet-4" })), 0.3),
+);
+check(
+  "sonnet above 200K input bills every token type at the high tier",
+  near(
+    calculateMessageCost(
+      msg({ inputTokens: 3e5, outputTokens: 1e6, model: "claude-sonnet-4" }),
+    ),
+    (3e5 / 1e6) * 6 + 22.5,
+  ),
+);
+// Below the 200K threshold, or the sonnet tier would apply and mask the rate.
+check(
+  "unknown model falls back to sonnet pricing",
+  near(calculateMessageCost(msg({ inputTokens: 1e5, model: "gpt-9" })), 0.3),
+  `got ${calculateMessageCost(msg({ inputTokens: 1e5, model: "gpt-9" }))}`,
+);
+check(
+  "missing model also falls back to sonnet",
+  near(calculateMessageCost(msg({ inputTokens: 1e5 })), 0.3),
+);
+check("formatCost keeps 4dp under a cent", formatCost(0.0012) === "$0.0012");
+check("formatCost uses 2dp above a cent", formatCost(12.345) === "$12.35");
+
 console.log(`\n${failures === 0 ? "ALL PASSED" : `${failures} FAILURE(S)`}`);
 process.exit(failures === 0 ? 0 : 1);

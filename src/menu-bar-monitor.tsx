@@ -22,6 +22,8 @@ import {
   getSubscriptionUsage,
   SubscriptionUsage,
 } from "./lib/subscription-usage";
+import { formatCost } from "./lib/pricing";
+import { getUsageMode } from "./lib/usage-mode";
 
 function percentColor(percent: number): Color {
   if (percent >= 90) return Color.Red;
@@ -57,15 +59,20 @@ export default function MenuBarMonitor() {
         setRecentProject(recent?.name || null);
       }
 
-      // Limits drive the menu bar title, so they are fetched even on background
-      // ticks. The 60s cache inside getSubscriptionUsage keeps this to roughly
-      // one request per minute regardless of how often the tick fires. A
-      // failure here must not blank the whole menu bar, so it is caught
-      // separately from the local signals above.
-      try {
-        setUsage(await getSubscriptionUsage());
-      } catch {
+      // Limits drive the menu bar title in subscription mode, so they are
+      // fetched even on background ticks. The 60s cache inside
+      // getSubscriptionUsage keeps this to roughly one request per minute
+      // regardless of how often the tick fires. A failure here must not blank
+      // the whole menu bar, so it is caught separately from the local signals
+      // above. API mode never needs the network.
+      if (getUsageMode() === "api") {
         setUsage(null);
+      } else {
+        try {
+          setUsage(await getSubscriptionUsage());
+        } catch {
+          setUsage(null);
+        }
       }
       setError(null);
     } catch (e) {
@@ -88,6 +95,8 @@ export default function MenuBarMonitor() {
     return "command-icon.png";
   };
 
+  const isApi = getUsageMode() === "api";
+
   // The 5h window is the one that actually gates work, so it gets the title.
   const fiveHour = usage?.buckets.find(
     (b) => b.key === "five_hour" || b.key.includes("five_hour"),
@@ -96,6 +105,11 @@ export default function MenuBarMonitor() {
   const getTitle = () => {
     if (isLoading) return undefined;
     if (!preferences.showUsageInMenuBar) return undefined;
+    if (isApi) {
+      return todayStats && todayStats.totalCost > 0
+        ? formatCost(todayStats.totalCost)
+        : undefined;
+    }
     if (fiveHour) return formatPercent(fiveHour.percent);
     // Limits unavailable (no token / offline): fall back to local token counts
     // rather than showing nothing.
@@ -164,7 +178,11 @@ export default function MenuBarMonitor() {
           icon={Icon.Message}
         />
         <MenuBarExtra.Item
-          title={`Tokens: ${formatTokens(todayStats?.totalTokens || 0)}`}
+          title={
+            isApi
+              ? `Cost: ${formatCost(todayStats?.totalCost || 0)}`
+              : `Tokens: ${formatTokens(todayStats?.totalTokens || 0)}`
+          }
           icon={Icon.Coin}
         />
       </MenuBarExtra.Section>
