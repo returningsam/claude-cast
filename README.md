@@ -25,7 +25,7 @@ drops that pricing table entirely and instead fetches live limit utilization
 stats in tokens, and puts the 5h percentage in the menu bar. The only dollar
 figure left is extra-usage credits, and only once actually spent.
 
-Three things to know when working on it:
+Two things to know when working on it:
 
 - `npm run build` to install — this writes straight into
   `~/.config/raycast/extensions/`.
@@ -59,7 +59,7 @@ Find and resume any Claude Code conversation across all projects.
 - Filter by project
 - Inline conversation preview with the most recent 20 messages and a "Showing last N of M messages" notice for long sessions
 - Resume, fork, or delete sessions
-- See cost and token usage per session
+- Session metadata: project, turn count, model, and last-modified
 - Restores the original permission mode and model on resume
 
 ### Agentic Workflows
@@ -141,17 +141,21 @@ One keystroke to continue your last Claude Code session. No UI - just launches d
 Real-time Claude Code status in your menu bar.
 
 - Active session indicator
-- Today's cost and session count
+- Title shows how much of the rolling 5-hour limit is used, falling back to
+  today's token count when limits are unavailable
+- Every limit window listed with its reset time, colored by headroom
+- Today's session and token counts
 - Quick access to all commands
 
 ### Usage Dashboard
-Detailed cost and usage metrics with a live SVG bar chart.
+Live subscription limits above historical token usage, with an SVG bar chart.
 
+- Subscription limits section: every rolling window with a usage bar and reset time
 - Range tabs adapt the chart granularity: Today/Week (daily bars), Month (weekly), All Time (up to 12 monthly bars)
 - Per-range totals, token breakdown (input, output, cache read, cache write)
-- Top projects as colored tags; "Cost by Project" and "Top Sessions" tables
-- Streaming-chunk dedup so cumulative usage reports match Anthropic's actual billing
-- Per-model pricing including Opus 4.7, Opus 4.1, and the Sonnet 200K-token tier
+- Top projects as colored tags; "Usage by Project" and "Top Sessions" tables
+- Streaming-chunk dedup so cumulative usage reports are not double-counted
+- Extra-usage credits shown only once actually spent — the one real dollar figure
 
 ## Installation
 
@@ -166,15 +170,20 @@ Detailed cost and usage metrics with a live SVG bar chart.
 
 ### Install Extension
 
-1. Clone this repository or download the extension
-2. Open Raycast and search for "Import Extension"
-3. Select the `claude-cast` directory
-4. Or run in development mode:
-   ```bash
-   cd claude-cast
-   npm install
-   npm run dev
-   ```
+Building the extension installs it — `ray build` writes the compiled bundle
+straight into `~/.config/raycast/extensions/`, so there is no import step and no
+dev server left running.
+
+```bash
+git clone https://github.com/returningsam/claude-cast
+cd claude-cast
+npm ci
+npm run build
+```
+
+Re-run `npm run build` after any edit. Use `npm run dev` only when you want
+hot-reload while working; stop it before the final build, since its watcher
+overwrites the production bundle.
 
 ## Setup
 
