@@ -352,7 +352,8 @@
     "fix-lint": "ray lint --fix",
     "lint": "ray lint",
     "publish": "npx @raycast/api@latest publish",
-    "test": "esbuild src/lib/subscription-usage.ts --bundle --format=esm --platform=node --alias:@raycast/api=./test/stub-raycast.js --outfile=test/bundle.mjs --log-level=warning && esbuild src/lib/pricing.ts --bundle --format=esm --platform=node --outfile=test/pricing.mjs --log-level=warning && node test/parser.test.mjs"
+    "test": "esbuild src/lib/subscription-usage.ts --bundle --format=esm --platform=node --alias:@raycast/api=./test/stub-raycast.js --outfile=test/bundle.mjs --log-level=warning && esbuild src/lib/pricing.ts --bundle --format=esm --platform=node --outfile=test/pricing.mjs --log-level=warning && node test/parser.test.mjs",
+    "reinstall": "node scripts/reinstall.mjs"
   },
   "overrides": {
     "@types/react": "18.2.79"

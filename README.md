@@ -180,12 +180,23 @@ dev server left running.
 git clone https://github.com/returningsam/claude-cast
 cd claude-cast
 npm ci
-npm run build
+npm run reinstall
 ```
 
-Re-run `npm run build` after any edit. Use `npm run dev` only when you want
-hot-reload while working; stop it before the final build, since its watcher
-overwrites the production bundle.
+Which script to use after an edit:
+
+| Changed | Run |
+|---------|-----|
+| Anything under `src/` | `npm run build` |
+| `package.json` (preferences, commands) | `npm run reinstall` |
+
+`ray build` writes the bundle and manifest but does not tell Raycast to re-read
+the manifest, so a new or renamed preference never shows up in the UI — Raycast
+keeps serving the schema from the last `ray develop` run. `npm run reinstall`
+cycles `ray develop` briefly to re-register, then installs a production build.
+
+Use `npm run dev` for hot-reload while working; stop it before the final build,
+since its watcher overwrites the production bundle.
 
 ## Setup
 
