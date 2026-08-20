@@ -25,12 +25,6 @@ drops that pricing table entirely and instead fetches live limit utilization
 stats in tokens, and puts the 5h percentage in the menu bar. The only dollar
 figure left is extra-usage credits, and only once actually spent.
 
-Two things to know when working on it:
-
-- `npm run build` to install — this writes straight into
-  `~/.config/raycast/extensions/`.
-- Sync with upstream via `git fetch upstream && git merge upstream/main`.
-
 ---
 
 ## Features
