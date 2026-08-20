@@ -15,8 +15,8 @@
 
 ## About this fork
 
-Vendored from [qazi0/claude-cast](https://github.com/qazi0/claude-cast) at
-`b4e5f3e`, patched to report **subscription usage instead of dollar costs**.
+Fork of [qazi0/claude-cast](https://github.com/qazi0/claude-cast) that reports
+**subscription usage instead of dollar costs**.
 
 Upstream priced local token counts at hardcoded API list rates — what the usage
 would have cost pay-as-you-go, which is not what a subscription bills. This fork
@@ -30,8 +30,10 @@ Two things to know when working on it:
 - `npm run build` **is** the install — `ray build` writes straight into
   `~/.config/raycast/extensions/`. No dev server needed; `setup.sh` runs it on a
   fresh machine.
-- Keep `.prettierrc`. Without it Prettier walks up to `~/.dotfiles/.prettierrc`
-  and reformats every file, destroying upstream diffs.
+- Keep `.prettierrc`. This repo is a submodule of `~/.dotfiles`, so without it
+  Prettier walks up to the parent config and reformats every file, destroying
+  upstream diffs.
+- Sync with upstream via `git fetch upstream && git merge upstream/main`.
 
 ---
 
