@@ -1,8 +1,7 @@
 import { Action, ActionPanel, Color, Detail, Icon } from "@raycast/api";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   DailyStats,
-  formatCost,
   formatTokens,
   generateProjectTable,
   getAllTimeStats,
@@ -14,6 +13,14 @@ import {
   UsageStats,
 } from "./lib/usage-stats";
 import { renderBarChartToFile } from "./lib/svg-chart";
+import {
+  formatPercent,
+  formatReset,
+  getSubscriptionUsage,
+  SubscriptionUsage,
+  SubscriptionUsageError,
+  usageBar,
+} from "./lib/subscription-usage";
 
 type RangeKey = "today" | "week" | "month" | "all";
 
@@ -38,6 +45,30 @@ export default function UsageDashboard() {
   // ready, then swaps atomically.
   const [dailyRange, setDailyRange] = useState<RangeKey>("today");
   const [range, setRange] = useState<RangeKey>("today");
+  const [usage, setUsage] = useState<SubscriptionUsage | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
+
+  // Live subscription limits. Independent of the local-JSONL stats: a failure
+  // here (no token, offline) hides the section but leaves the dashboard usable.
+  const loadUsage = useCallback((force = false) => {
+    getSubscriptionUsage(force)
+      .then((data) => {
+        setUsage(data);
+        setUsageError(null);
+      })
+      .catch((error: unknown) => {
+        setUsage(null);
+        setUsageError(
+          error instanceof SubscriptionUsageError
+            ? error.message
+            : "Could not load subscription limits.",
+        );
+      });
+  }, []);
+
+  useEffect(() => {
+    loadUsage();
+  }, [loadUsage]);
 
   // Fetch a daily series sized for the selected range. Cancellation token
   // protects against stale responses from rapid range switches.
@@ -78,7 +109,7 @@ export default function UsageDashboard() {
     const { points, header } = aggregateForChart(daily, dailyRange);
     if (points.length === 0) return null;
     const path = renderBarChartToFile(points, {
-      valueFormatter: (n) => (n >= 0.01 ? `$${n.toFixed(2)}` : ""),
+      valueFormatter: (n) => (n > 0 ? formatTokens(n) : ""),
     });
     const total = points.reduce((s, p) => s + p.value, 0);
     return { path, header, total };
@@ -91,6 +122,8 @@ export default function UsageDashboard() {
     stats,
     chart,
     statsLoading,
+    usage,
+    usageError,
   });
 
   return (
@@ -98,9 +131,17 @@ export default function UsageDashboard() {
       isLoading={statsLoading}
       markdown={markdown}
       navigationTitle={`Usage: ${RANGE_LABEL[range]}`}
-      metadata={<Sidebar stats={stats} />}
+      metadata={<Sidebar stats={stats} usage={usage} />}
       actions={
         <ActionPanel>
+          <ActionPanel.Section title="Subscription">
+            <Action
+              title="Refresh Limits"
+              icon={Icon.ArrowClockwise}
+              shortcut={{ modifiers: ["cmd"], key: "r" }}
+              onAction={() => loadUsage(true)}
+            />
+          </ActionPanel.Section>
           <ActionPanel.Section title="Time Range">
             <Action
               title="Today"
@@ -129,25 +170,65 @@ export default function UsageDashboard() {
   );
 }
 
-function Sidebar({ stats }: { stats: UsageStats | undefined }) {
+function Sidebar({
+  stats,
+  usage,
+}: {
+  stats: UsageStats | undefined;
+  usage: SubscriptionUsage | null;
+}) {
+  // Limits resolve from one HTTP call; the local stats need a full JSONL scan.
+  // Render the limits alone rather than holding them behind the slower half.
   if (!stats) {
     return (
       <Detail.Metadata>
-        <Detail.Metadata.Label title="Loading..." text="" />
+        {usage?.buckets.map((bucket) => (
+          <Detail.Metadata.Label
+            key={bucket.key}
+            title={bucket.label}
+            text={formatPercent(bucket.percent)}
+            icon={{
+              source: Icon.CircleProgress100,
+              tintColor: percentColor(bucket.percent),
+            }}
+          />
+        ))}
+        <Detail.Metadata.Label title="Loading usage..." text="" />
       </Detail.Metadata>
     );
   }
 
   const topProjects = Object.entries(stats.sessionsByProject)
-    .sort(([, a], [, b]) => b.cost - a.cost)
+    .sort(([, a], [, b]) => b.tokens - a.tokens)
     .slice(0, 5);
 
   return (
     <Detail.Metadata>
+      {usage && usage.buckets.length > 0 && (
+        <>
+          {usage.buckets.map((bucket) => (
+            <Detail.Metadata.Label
+              key={bucket.key}
+              title={bucket.label}
+              text={
+                bucket.resetsAt
+                  ? `${formatPercent(bucket.percent)} · resets ${formatReset(bucket.resetsAt)}`
+                  : formatPercent(bucket.percent)
+              }
+              icon={{
+                source: Icon.CircleProgress100,
+                tintColor: percentColor(bucket.percent),
+              }}
+            />
+          ))}
+          <Detail.Metadata.Separator />
+        </>
+      )}
+
       <Detail.Metadata.Label
-        title="Total Cost"
-        text={formatCost(stats.totalCost)}
-        icon={{ source: Icon.Coins, tintColor: Color.Yellow }}
+        title="Tokens"
+        text={formatTokens(stats.totalTokens)}
+        icon={{ source: Icon.Coin, tintColor: Color.Yellow }}
       />
       <Detail.Metadata.Label
         title="Sessions"
@@ -156,8 +237,10 @@ function Sidebar({ stats }: { stats: UsageStats | undefined }) {
       />
       <Detail.Metadata.Label
         title="Avg / Session"
-        text={formatCost(
-          stats.totalSessions > 0 ? stats.totalCost / stats.totalSessions : 0,
+        text={formatTokens(
+          stats.totalSessions > 0
+            ? Math.round(stats.totalTokens / stats.totalSessions)
+            : 0,
         )}
       />
 
@@ -187,7 +270,7 @@ function Sidebar({ stats }: { stats: UsageStats | undefined }) {
             {topProjects.map(([project, data]) => (
               <Detail.Metadata.TagList.Item
                 key={project}
-                text={`${project} (${formatCost(data.cost)})`}
+                text={`${project} (${formatTokens(data.tokens)})`}
                 color={Color.Blue}
               />
             ))}
@@ -199,9 +282,9 @@ function Sidebar({ stats }: { stats: UsageStats | undefined }) {
         <>
           <Detail.Metadata.Separator />
           <Detail.Metadata.Label
-            title="Most Expensive Session"
-            text={`${formatCost(stats.topSessions[0].cost)} in ${stats.topSessions[0].projectName}`}
-            icon={{ source: Icon.Warning, tintColor: Color.Orange }}
+            title="Largest Session"
+            text={`${formatTokens(stats.topSessions[0].tokens)} in ${stats.topSessions[0].projectName}`}
+            icon={{ source: Icon.BarChart, tintColor: Color.Orange }}
           />
         </>
       )}
@@ -236,7 +319,7 @@ function aggregateForChart(
     const points: { label: string; value: number }[] = [];
     for (let i = 0; i < daily.length; i += 7) {
       const chunk = daily.slice(i, i + 7);
-      const total = chunk.reduce((s, d) => s + d.cost, 0);
+      const total = chunk.reduce((s, d) => s + d.tokens, 0);
       const start = chunk[0].date.slice(5);
       const end = chunk[chunk.length - 1].date.slice(5);
       points.push({
@@ -244,14 +327,14 @@ function aggregateForChart(
         value: total,
       });
     }
-    return { points, header: "Weekly Cost (Last 30 Days)" };
+    return { points, header: "Weekly Tokens (Last 30 Days)" };
   }
 
   if (range === "all") {
     const monthMap = new Map<string, number>();
     for (const d of daily) {
       const monthKey = d.date.slice(0, 7); // YYYY-MM
-      monthMap.set(monthKey, (monthMap.get(monthKey) || 0) + d.cost);
+      monthMap.set(monthKey, (monthMap.get(monthKey) || 0) + d.tokens);
     }
     const sorted = Array.from(monthMap.entries()).sort();
     const recent = sorted.slice(-12);
@@ -278,16 +361,79 @@ function aggregateForChart(
     });
     const header =
       recent.length > 0
-        ? `Monthly Cost (Last ${recent.length} Months)`
-        : "Monthly Cost";
+        ? `Monthly Tokens (Last ${recent.length} Months)`
+        : "Monthly Tokens";
     return { points, header };
   }
 
   // today / week: one bar per day, MM-DD label.
   return {
-    points: daily.map((d) => ({ label: d.date.slice(5), value: d.cost })),
-    header: `Daily Cost (Last ${daily.length} Days)`,
+    points: daily.map((d) => ({ label: d.date.slice(5), value: d.tokens })),
+    header: `Daily Tokens (Last ${daily.length} Days)`,
   };
+}
+
+function percentColor(percent: number): Color {
+  if (percent >= 90) return Color.Red;
+  if (percent >= 70) return Color.Orange;
+  return Color.Green;
+}
+
+const NEAR_LIMIT_PERCENT = 80;
+
+function anyWindowNearLimit(usage: SubscriptionUsage): boolean {
+  return usage.buckets.some((b) => b.percent >= NEAR_LIMIT_PERCENT);
+}
+
+function formatMoney(amount: number, currency: string): string {
+  const symbol = currency === "USD" ? "$" : `${currency} `;
+  return `${symbol}${amount.toFixed(2)}`;
+}
+
+// Live subscription limits, rendered above the historical stats. This is the
+// only section that reflects actual subscription billing; everything below it
+// prices local token counts at API list rates.
+function buildUsageSection(
+  usage: SubscriptionUsage | null,
+  usageError: string | null,
+): string {
+  if (usageError) {
+    return `## Subscription Limits\n\n_${usageError}_\n\n`;
+  }
+  if (!usage) {
+    return `## Subscription Limits\n\n_Loading limits..._\n\n`;
+  }
+  if (usage.buckets.length === 0 && !usage.extraUsage?.isEnabled) {
+    return "";
+  }
+
+  let md = `## Subscription Limits\n\n`;
+  if (usage.buckets.length > 0) {
+    md += `| Window | Used | Resets |\n`;
+    md += `|--------|------|--------|\n`;
+    for (const bucket of usage.buckets) {
+      const reset = bucket.resetsAt ? formatReset(bucket.resetsAt) : "—";
+      md += `| ${escapeMd(bucket.label)} | \`${usageBar(bucket.percent)}\` ${formatPercent(bucket.percent)} | ${reset} |\n`;
+    }
+    md += `\n`;
+  }
+
+  // The only dollar figure in the extension, and only once it is real money.
+  // At zero spend the line says nothing useful, so it stays hidden.
+  const extra = usage.extraUsage;
+  const spent = extra?.usedCredits ?? 0;
+  if (extra?.isEnabled && spent > 0) {
+    const currency = extra.currency ?? "USD";
+    const cap =
+      extra.monthlyLimit !== null
+        ? ` of ${formatMoney(extra.monthlyLimit, currency)} cap`
+        : "";
+    md += `⚠️ **Extra usage: ${formatMoney(spent, currency)}${cap}** — billed on top of the subscription.\n\n`;
+  } else if (extra && !extra.isEnabled && anyWindowNearLimit(usage)) {
+    md += `_Extra usage is off, so work stops when a window above hits 100%._\n\n`;
+  }
+
+  return md;
 }
 
 function buildMarkdown(args: {
@@ -295,17 +441,20 @@ function buildMarkdown(args: {
   stats: UsageStats | undefined;
   chart: { path: string; header: string; total: number } | null;
   statsLoading: boolean;
+  usage: SubscriptionUsage | null;
+  usageError: string | null;
 }): string {
-  const { range, stats, chart, statsLoading } = args;
+  const { range, stats, chart, statsLoading, usage, usageError } = args;
 
   let md = `# Claude Code Usage: ${RANGE_LABEL[range]}\n\n`;
+  md += buildUsageSection(usage, usageError);
 
   // Range-adapted chart. The aggregator picks the right granularity (daily,
   // weekly, or monthly) so the X-axis stays readable regardless of window.
   if (chart) {
     md += `## ${chart.header}\n\n`;
     md += `![${chart.header}](file://${chart.path}?raycast-width=820)\n\n`;
-    md += `_Total: **${formatCost(chart.total)}**_\n\n`;
+    md += `_Total: **${formatTokens(chart.total)}** tokens (input + output)._\n\n`;
   }
 
   if (!stats) {
@@ -318,7 +467,7 @@ function buildMarkdown(args: {
   // Project breakdown for the selected range.
   const projectKeys = Object.keys(stats.sessionsByProject);
   if (projectKeys.length > 0) {
-    md += `## Cost by Project (${RANGE_LABEL[range]})\n\n`;
+    md += `## Usage by Project (${RANGE_LABEL[range]})\n\n`;
     md += generateProjectTable(stats.sessionsByProject);
     md += `\n`;
   }
@@ -326,17 +475,17 @@ function buildMarkdown(args: {
   // Top sessions for the selected range.
   if (stats.topSessions.length > 0) {
     md += `## Top Sessions (${RANGE_LABEL[range]})\n\n`;
-    md += `| # | Project | First Message | Cost |\n`;
-    md += `|--:|---------|---------------|-----:|\n`;
+    md += `| # | Project | First Message | Tokens |\n`;
+    md += `|--:|---------|---------------|-------:|\n`;
     stats.topSessions.slice(0, 10).forEach((s, i) => {
       const preview = sessionPreview(s);
-      md += `| ${i + 1} | ${escapeMd(s.projectName)} | ${escapeMd(preview)} | ${formatCost(s.cost)} |\n`;
+      md += `| ${i + 1} | ${escapeMd(s.projectName)} | ${escapeMd(preview)} | ${formatTokens(s.tokens)} |\n`;
     });
     md += `\n`;
   }
 
   md += `\n---\n\n`;
-  md += `_Tip: use ⌘K to switch range. Sidebar totals update with the range._\n`;
+  md += `_Tip: ⌘K to switch range, ⌘R to refresh limits. Token counts below are input + output; cache totals are in the sidebar._\n`;
 
   return md;
 }
