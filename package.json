@@ -196,11 +196,11 @@
       ],
       "preferences": [
         {
-          "name": "showCostInMenuBar",
+          "name": "showUsageInMenuBar",
           "type": "checkbox",
-          "default": false,
-          "label": "Show Today's Cost",
-          "description": "Display today's spend (USD) next to the menu bar icon. Updates every 30 seconds.",
+          "default": true,
+          "label": "Show 5h Limit in Menu Bar",
+          "description": "Display the percentage of your rolling 5-hour usage limit next to the menu bar icon. Falls back to today's token count if limits are unavailable. Updates every 30 seconds.",
           "required": false
         }
       ]
@@ -333,7 +333,8 @@
     "dev": "ray develop",
     "fix-lint": "ray lint --fix",
     "lint": "ray lint",
-    "publish": "npx @raycast/api@latest publish"
+    "publish": "npx @raycast/api@latest publish",
+    "test": "esbuild src/lib/subscription-usage.ts --bundle --format=esm --platform=node --alias:@raycast/api=./test/stub-raycast.js --outfile=test/bundle.mjs --log-level=warning && node test/parser.test.mjs"
   },
   "overrides": {
     "@types/react": "18.2.79"

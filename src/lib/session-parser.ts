@@ -21,7 +21,6 @@ export interface SessionMetadata {
   firstMessage: string;
   lastModified: Date;
   turnCount: number;
-  cost: number;
   model?: string;
   matchSnippet?: string;
   permissionMode?: PermissionMode;
@@ -671,7 +670,6 @@ async function parseFullSession(
           firstMessage,
           lastModified: stat.mtime,
           turnCount: totalMessageCount,
-          cost: 0,
           model,
           messages: trimmedMessages,
           totalMessageCount,
@@ -796,7 +794,6 @@ export async function listAllSessions(options?: {
         firstMessage: metadata.firstMessage || "",
         lastModified: mtime,
         turnCount: metadata.turnCount || 0,
-        cost: metadata.cost || 0,
         model: metadata.model,
         permissionMode: metadata.permissionMode,
       });
@@ -836,7 +833,6 @@ export async function listProjectSessions(
           firstMessage: metadata.firstMessage || "",
           lastModified: stat.mtime,
           turnCount: metadata.turnCount || 0,
-          cost: metadata.cost || 0,
           model: metadata.model,
           permissionMode: metadata.permissionMode,
         });
@@ -922,7 +918,6 @@ export async function searchSessionContent(
         firstMessage: match.firstMessage || "",
         lastModified: mtime,
         turnCount: match.turnCount,
-        cost: match.cost,
         model: match.model,
         matchSnippet: match.matchSnippet,
         permissionMode: match.permissionMode,
@@ -933,7 +928,7 @@ export async function searchSessionContent(
 
 /**
  * Search a single session file for a query match.
- * Reads the entire file to collect full metadata (turnCount, cost, model).
+ * Reads the entire file to collect full metadata (turnCount, model).
  * Sets a match flag on first content hit, skipping redundant string
  * comparisons for subsequent lines.
  */
@@ -946,7 +941,6 @@ async function searchSingleSession(
   summary: string;
   firstMessage: string;
   turnCount: number;
-  cost: number;
   model?: string;
   matchSnippet?: string;
   permissionMode?: PermissionMode;
@@ -956,7 +950,6 @@ async function searchSingleSession(
     summary: string;
     firstMessage: string;
     turnCount: number;
-    cost: number;
     model?: string;
     matchSnippet?: string;
     permissionMode?: PermissionMode;
@@ -1080,7 +1073,6 @@ async function searchSingleSession(
               summary,
               firstMessage,
               turnCount,
-              cost: 0,
               model,
               matchSnippet,
               permissionMode,
@@ -1112,7 +1104,7 @@ export interface SessionUsage {
   model?: string;
 }
 
-/** Per-message tokens, used for tier-aware cost calculation per request. */
+/** Per-message token counts, deduplicated per request. */
 export interface MessageUsage {
   inputTokens: number;
   outputTokens: number;
@@ -1130,7 +1122,7 @@ export interface SessionUsageDetailed extends SessionUsage {
    * Optional per-day bucketing keyed by YYYY-MM-DD. Populated only when the
    * caller passes `bucketByDay: true`. Costs/tokens stay scoped to the day
    * each message's timestamp falls into. Fixes attribution that previously
-   * stamped all of a session's cost on its file mtime.
+   * stamped all of a session's usage on its file mtime.
    */
   dailyByDate?: Map<string, MessageUsage[]>;
 }

@@ -778,12 +778,6 @@ function ExecutingPromptView({
       markdown={markdown}
       metadata={
         <Detail.Metadata>
-          {result?.total_cost_usd && (
-            <Detail.Metadata.Label
-              title="Cost"
-              text={`$${result.total_cost_usd.toFixed(4)}`}
-            />
-          )}
           {result?.usage && (
             <Detail.Metadata.Label
               title="Tokens"

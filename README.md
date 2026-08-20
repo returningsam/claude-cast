@@ -13,6 +13,28 @@
 
 ---
 
+## About this fork
+
+Vendored from [qazi0/claude-cast](https://github.com/qazi0/claude-cast) at
+`b4e5f3e`, patched to report **subscription usage instead of dollar costs**.
+
+Upstream priced local token counts at hardcoded API list rates — what the usage
+would have cost pay-as-you-go, which is not what a subscription bills. This fork
+drops that pricing table entirely and instead fetches live limit utilization
+(the rolling 5h / 7d windows behind Claude Code's `/usage`), shows historical
+stats in tokens, and puts the 5h percentage in the menu bar. The only dollar
+figure left is extra-usage credits, and only once actually spent.
+
+Two things to know when working on it:
+
+- `npm run build` **is** the install — `ray build` writes straight into
+  `~/.config/raycast/extensions/`. No dev server needed; `setup.sh` runs it on a
+  fresh machine.
+- Keep `.prettierrc`. Without it Prettier walks up to `~/.dotfiles/.prettierrc`
+  and reformats every file, destroying upstream diffs.
+
+---
+
 ## Features
 
 ### Launch Project

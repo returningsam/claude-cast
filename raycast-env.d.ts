@@ -49,8 +49,8 @@ declare namespace Preferences {
   export type TransformSelection = ExtensionPreferences & {}
   /** Preferences accessible in the `menu-bar-monitor` command */
   export type MenuBarMonitor = ExtensionPreferences & {
-  /** undefined - Display today's spend (USD) next to the menu bar icon. Updates every 30 seconds. */
-  "showCostInMenuBar": boolean
+  /** undefined - Display the percentage of your rolling 5-hour usage limit next to the menu bar icon. Falls back to today's token count if limits are unavailable. Updates every 30 seconds. */
+  "showUsageInMenuBar": boolean
 }
   /** Preferences accessible in the `usage-dashboard` command */
   export type UsageDashboard = ExtensionPreferences & {}

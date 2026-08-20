@@ -168,13 +168,6 @@ function SearchResultItem({
     });
   }
 
-  if (session.cost > 0) {
-    accessories.push({
-      text: `$${session.cost.toFixed(4)}`,
-      icon: Icon.Coins,
-    });
-  }
-
   accessories.push({
     date: session.lastModified,
   });
@@ -362,12 +355,6 @@ function SessionDetailView({
             title="Turns"
             text={`${session.turnCount} messages`}
           />
-          {session.cost > 0 && (
-            <Detail.Metadata.Label
-              title="Cost"
-              text={`$${session.cost.toFixed(4)}`}
-            />
-          )}
           {session.model && (
             <Detail.Metadata.Label title="Model" text={session.model} />
           )}
@@ -447,9 +434,6 @@ function buildDetailMarkdown(session: SessionMetadata): string {
   md += `---\n\n`;
   md += `**Project:** ${session.projectPath}\n\n`;
   md += `**Turns:** ${session.turnCount}`;
-  if (session.cost > 0) {
-    md += ` · **Cost:** $${session.cost.toFixed(4)}`;
-  }
   md += `\n\n`;
   md += `**Modified:** ${session.lastModified.toLocaleString()}`;
 

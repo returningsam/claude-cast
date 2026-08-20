@@ -375,10 +375,6 @@ function ResponseView({
 }) {
   const markdown = formatResponseMarkdown(response);
 
-  const costInfo = response.total_cost_usd
-    ? `$${response.total_cost_usd.toFixed(4)}`
-    : undefined;
-
   const usageInfo = response.usage
     ? `${response.usage.input_tokens} in / ${response.usage.output_tokens} out`
     : undefined;
@@ -394,7 +390,6 @@ function ResponseView({
               text={response.session_id}
             />
           )}
-          {costInfo && <Detail.Metadata.Label title="Cost" text={costInfo} />}
           {usageInfo && (
             <Detail.Metadata.Label title="Tokens" text={usageInfo} />
           )}
