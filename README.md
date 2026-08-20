@@ -148,6 +148,9 @@ Real-time Claude Code status in your menu bar.
 - Today's session and token counts
 - Quick access to all commands
 
+Its **Show 5h Limit in Menu Bar** preference replaces upstream's "Show Today's
+Cost" and is on by default (upstream's was off).
+
 ### Usage Dashboard
 Live subscription limits above historical token usage, with an SVG bar chart.
 Switches to list-rate cost estimates in API mode.
@@ -200,9 +203,23 @@ since its watcher overwrites the production bundle.
 
 ## Setup
 
-### OAuth Token (Required for API Features)
+### OAuth Token
 
-Some features (Ask Claude Code, Transform Selection, Git Actions) require an OAuth token to work in Raycast's sandboxed environment:
+Two things need a token: the API features (Ask Claude Code, Transform Selection,
+Git Actions) which run the CLI inside Raycast's sandbox, and — new in this fork —
+the subscription limits lookup.
+
+The limits lookup usually needs no setup. It resolves a token in this order:
+
+1. the **OAuth Token** preference below
+2. `CLAUDE_CODE_OAUTH_TOKEN` in the environment
+3. the `Claude Code-credentials` login-keychain item Claude Code already writes
+
+Step 3 means it generally works out of the box, though the first lookup may raise
+a one-time macOS keychain prompt. Setting the preference skips that. If no token
+resolves, the limits section explains why instead of failing silently.
+
+To set the preference explicitly:
 
 1. Generate a long-lived OAuth token:
    ```bash
@@ -265,7 +282,18 @@ npm run lint
 
 # Fix lint issues
 npm run fix-lint
+
+# Run the parser and pricing tests (no network or token needed)
+npm test
+
+# Rebuild AND re-register the manifest — needed after editing package.json
+npm run reinstall
 ```
+
+`test/` is new in this fork. It bundles the usage modules with `@raycast/api`
+stubbed so they can be exercised outside Raycast, covering both shapes of the
+usage API response, unknown future limit windows, malformed payloads, auth
+failures, and the model pricing table.
 
 ## Project Structure
 
@@ -290,7 +318,15 @@ claude-cast/
 │       ├── terminal.ts           # Terminal launch utilities (Terminal, iTerm, Warp, kitty, Ghostty, cmux)
 │       ├── svg-chart.ts          # SVG bar chart for the Usage Dashboard
 │       ├── prompts.ts            # Built-in prompts
-│       └── usage-stats.ts        # Usage statistics
+│       ├── usage-stats.ts        # Token/cost statistics from local session files
+│       ├── subscription-usage.ts # Live 5h/7d limit lookup (this fork)
+│       ├── pricing.ts            # API list-rate table, used only in API mode
+│       └── usage-mode.ts         # Subscription vs API display mode (this fork)
+├── scripts/
+│   └── reinstall.mjs           # Re-register the manifest, then build
+├── test/
+│   ├── parser.test.mjs         # Usage parser and pricing tests
+│   └── stub-raycast.js         # @raycast/api stub so modules run under node
 ├── assets/
 │   └── command-icon.png        # Extension icon
 ├── package.json
