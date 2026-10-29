@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import readline from "readline";
+import { StringDecoder } from "string_decoder";
 import { trash } from "@raycast/api";
 
 export type PermissionMode =
@@ -429,101 +430,130 @@ export async function listSessionFiles(
 }
 
 /**
+ * Session logs can hold multi-MB lines (base64 images in tool results). The
+ * usage and metadata scanners never need those lines, and decoding them pushed
+ * the usage dashboard past Raycast's 100 MB worker heap.
+ */
+const MAX_LINE_BYTES = 1024 * 1024;
+
+/**
+ * Stream a file line by line, dropping any line longer than MAX_LINE_BYTES
+ * without buffering it. Return false from onLine to stop reading early.
+ */
+function readCappedLines(
+  filePath: string,
+  onLine: (line: string) => boolean | void,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
+    // A newline byte never falls inside a multi-byte UTF-8 sequence, so the
+    // decoder holds no partial character at line boundaries.
+    const decoder = new StringDecoder("utf8");
+    let pieces: string[] = [];
+    let size = 0;
+    let skipping = false;
+    let done = false;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      stream.removeAllListeners();
+      stream.destroy();
+      resolve();
+    };
+
+    const emitLine = (): boolean => {
+      const keep = !skipping && size > 0;
+      const line = keep ? pieces.join("") : "";
+      pieces = [];
+      size = 0;
+      skipping = false;
+      return keep ? onLine(line) !== false : true;
+    };
+
+    stream.on("data", (chunk: Buffer | string) => {
+      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      let start = 0;
+      while (!done) {
+        const newline = buf.indexOf(0x0a, start);
+        const end = newline === -1 ? buf.length : newline;
+        if (!skipping && end > start) {
+          if (size + end - start > MAX_LINE_BYTES) {
+            skipping = true;
+            decoder.end();
+            pieces = [];
+            size = 0;
+          } else {
+            pieces.push(decoder.write(buf.subarray(start, end)));
+            size += end - start;
+          }
+        }
+        if (newline === -1) break;
+        if (!emitLine()) return finish();
+        start = newline + 1;
+      }
+    });
+    stream.on("end", () => {
+      emitLine();
+      finish();
+    });
+    stream.on("error", finish);
+  });
+}
+
+/**
  * Parse the first few lines of a JSONL session file to get metadata
- * Uses proper stream cleanup to prevent memory leaks
  */
 async function parseSessionMetadataFast(
   filePath: string,
 ): Promise<Partial<SessionMetadata>> {
-  return new Promise((resolve) => {
-    const result: Partial<SessionMetadata> = {};
-    let lineCount = 0;
-    let turnCount = 0;
-    let resolved = false;
+  const result: Partial<SessionMetadata> = {};
+  let lineCount = 0;
+  let turnCount = 0;
 
-    const safeResolve = () => {
-      if (resolved) return;
-      resolved = true;
-      result.turnCount = turnCount;
-      resolve(result);
-    };
+  await readCappedLines(filePath, (line) => {
+    lineCount++;
 
-    const stream = fs.createReadStream(filePath, {
-      encoding: "utf8",
-      // Limit buffer size to reduce memory usage
-      highWaterMark: 16 * 1024, // 16KB instead of default 64KB
-    });
-    const rl = readline.createInterface({
-      input: stream,
-      crlfDelay: Infinity,
-    });
+    try {
+      const entry: JSONLEntry = JSON.parse(line);
 
-    const cleanup = () => {
-      rl.removeAllListeners();
-      stream.removeAllListeners();
-      rl.close();
-      stream.destroy();
-    };
-
-    rl.on("line", (line) => {
-      if (resolved) return;
-      lineCount++;
-
-      try {
-        const entry: JSONLEntry = JSON.parse(line);
-
-        if (entry.type === "summary") {
-          result.summary = sanitizeString(entry.summary || "");
-          result.id = entry.leafUuid || path.basename(filePath, ".jsonl");
-        }
-
-        if (entry.type === "user" || entry.type === "human") {
-          turnCount++;
-          if (!result.permissionMode && entry.permissionMode) {
-            result.permissionMode = entry.permissionMode;
-          }
-          if (!result.firstMessage && entry.message?.content) {
-            const raw = extractUserText(entry.message.content);
-            const cleaned = cleanUserMessageContent(raw);
-            if (cleaned) {
-              result.firstMessage = sanitizeString(safeTruncate(cleaned, 200));
-            }
-          }
-        }
-
-        if (entry.type === "assistant") {
-          turnCount++;
-        }
-
-        const entryModel = entry.message?.model || entry.model;
-        if (entryModel) {
-          result.model = entryModel;
-        }
-      } catch {
-        // Skip unparseable lines silently to avoid memory accumulation from console.warn
+      if (entry.type === "summary") {
+        result.summary = sanitizeString(entry.summary || "");
+        result.id = entry.leafUuid || path.basename(filePath, ".jsonl");
       }
 
-      // Read enough lines for metadata, then cleanup immediately
-      if (lineCount >= 50) {
-        cleanup();
-        safeResolve();
+      if (entry.type === "user" || entry.type === "human") {
+        turnCount++;
+        if (!result.permissionMode && entry.permissionMode) {
+          result.permissionMode = entry.permissionMode;
+        }
+        if (!result.firstMessage && entry.message?.content) {
+          const raw = extractUserText(entry.message.content);
+          const cleaned = cleanUserMessageContent(raw);
+          if (cleaned) {
+            result.firstMessage = sanitizeString(safeTruncate(cleaned, 200));
+          }
+        }
       }
-    });
 
-    rl.on("close", () => {
-      safeResolve();
-    });
+      if (entry.type === "assistant") {
+        turnCount++;
+      }
 
-    rl.on("error", () => {
-      cleanup();
-      safeResolve();
-    });
+      const entryModel = entry.message?.model || entry.model;
+      if (entryModel) {
+        result.model = entryModel;
+      }
+    } catch {
+      // Skip unparseable lines silently to avoid memory accumulation from console.warn
+    }
 
-    stream.on("error", () => {
-      cleanup();
-      safeResolve();
-    });
+    // Read enough lines for metadata, then stop
+    return lineCount < 50;
   });
+
+  result.turnCount = turnCount;
+  return result;
 }
 
 export interface SessionDetailOptions {
@@ -1135,125 +1165,96 @@ export interface SessionUsageDetailed extends SessionUsage {
  * naive summing multiplies by chunk count. We dedup by (message.id + requestId)
  * and keep the last (largest) value per key, then sum across keys. Lines
  * without both IDs (older logs) tally directly.
- *
- * Stream listeners get explicit cleanup to keep V8 GC pressure low under
- * back-to-back invocations.
  */
 export async function streamSessionUsage(
   filePath: string,
   afterDate?: Date,
   options?: { bucketByDay?: boolean },
 ): Promise<SessionUsageDetailed> {
-  return new Promise((resolve) => {
-    let model: string | undefined;
-    // Streaming chunks share message.id + requestId. Keep the last (cumulative
-    // final) per key. Lines lacking both IDs (older logs) tally separately.
-    const seenChunks = new Map<string, MessageUsage>();
-    const unkeyed: MessageUsage[] = [];
-    let resolved = false;
+  let model: string | undefined;
+  // Streaming chunks share message.id + requestId. Keep the last (cumulative
+  // final) per key. Lines lacking both IDs (older logs) tally separately.
+  const seenChunks = new Map<string, MessageUsage>();
+  const unkeyed: MessageUsage[] = [];
 
-    const stream = fs.createReadStream(filePath, {
-      encoding: "utf8",
-      highWaterMark: 16 * 1024,
-    });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
-    const cleanup = () => {
-      rl.removeAllListeners();
-      stream.removeAllListeners();
-      rl.close();
-      stream.destroy();
-    };
-
-    const safeResolve = () => {
-      if (resolved) return;
-      resolved = true;
-      cleanup();
-
-      const messages: MessageUsage[] = [...seenChunks.values(), ...unkeyed];
-
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let cacheReadTokens = 0;
-      let cacheCreationTokens = 0;
-      for (const m of messages) {
-        inputTokens += m.inputTokens;
-        outputTokens += m.outputTokens;
-        cacheReadTokens += m.cacheReadTokens;
-        cacheCreationTokens += m.cacheCreationTokens;
-      }
-
-      let dailyByDate: Map<string, MessageUsage[]> | undefined;
-      if (options?.bucketByDay) {
-        dailyByDate = new Map();
-        for (const m of messages) {
-          if (!m.timestamp) continue;
-          const dateStr = m.timestamp.slice(0, 10);
-          let bucket = dailyByDate.get(dateStr);
-          if (!bucket) {
-            bucket = [];
-            dailyByDate.set(dateStr, bucket);
-          }
-          bucket.push(m);
+  await readCappedLines(filePath, (line) => {
+    if (!line.includes('"usage"')) return;
+    try {
+      const entry: JSONLEntry = JSON.parse(line);
+      if (!entry.message?.usage) return;
+      if (afterDate) {
+        // Skip entries older than the cutoff. Entries lacking a timestamp
+        // (older JSONL formats) are also skipped: without a timestamp we
+        // can't verify they fall inside the requested range, so counting
+        // them would inflate today/week/month totals.
+        if (!entry.timestamp || new Date(entry.timestamp) < afterDate) {
+          return;
         }
       }
 
-      resolve({
-        inputTokens,
-        outputTokens,
-        cacheReadTokens,
-        cacheCreationTokens,
-        model,
-        messages,
-        dailyByDate,
-      });
-    };
+      const usage = entry.message.usage;
+      const msg: MessageUsage = {
+        inputTokens: usage.input_tokens || 0,
+        outputTokens: usage.output_tokens || 0,
+        cacheReadTokens: usage.cache_read_input_tokens || 0,
+        cacheCreationTokens: usage.cache_creation_input_tokens || 0,
+        model: entry.message?.model || entry.model,
+        timestamp: entry.timestamp,
+      };
 
-    rl.on("line", (line) => {
-      if (resolved) return;
-      try {
-        const entry: JSONLEntry = JSON.parse(line);
-        if (!entry.message?.usage) return;
-        if (afterDate) {
-          // Skip entries older than the cutoff. Entries lacking a timestamp
-          // (older JSONL formats) are also skipped: without a timestamp we
-          // can't verify they fall inside the requested range, so counting
-          // them would inflate today/week/month totals.
-          if (!entry.timestamp || new Date(entry.timestamp) < afterDate) {
-            return;
-          }
-        }
-
-        const usage = entry.message.usage;
-        const msg: MessageUsage = {
-          inputTokens: usage.input_tokens || 0,
-          outputTokens: usage.output_tokens || 0,
-          cacheReadTokens: usage.cache_read_input_tokens || 0,
-          cacheCreationTokens: usage.cache_creation_input_tokens || 0,
-          model: entry.message?.model || entry.model,
-          timestamp: entry.timestamp,
-        };
-
-        const msgId = entry.message?.id;
-        const reqId = entry.requestId;
-        if (msgId && reqId) {
-          // Last write wins → preserves the final cumulative value.
-          seenChunks.set(`${msgId}:${reqId}`, msg);
-        } else {
-          unkeyed.push(msg);
-        }
-
-        const m = msg.model;
-        if (m) model = m;
-      } catch {
-        // skip unparseable
+      const msgId = entry.message?.id;
+      const reqId = entry.requestId;
+      if (msgId && reqId) {
+        // Last write wins → preserves the final cumulative value.
+        seenChunks.set(`${msgId}:${reqId}`, msg);
+      } else {
+        unkeyed.push(msg);
       }
-    });
 
-    rl.on("close", safeResolve);
-    rl.on("error", safeResolve);
-    stream.on("error", safeResolve);
+      const m = msg.model;
+      if (m) model = m;
+    } catch {
+      // skip unparseable
+    }
   });
+
+  const messages: MessageUsage[] = [...seenChunks.values(), ...unkeyed];
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
+  for (const m of messages) {
+    inputTokens += m.inputTokens;
+    outputTokens += m.outputTokens;
+    cacheReadTokens += m.cacheReadTokens;
+    cacheCreationTokens += m.cacheCreationTokens;
+  }
+
+  let dailyByDate: Map<string, MessageUsage[]> | undefined;
+  if (options?.bucketByDay) {
+    dailyByDate = new Map();
+    for (const m of messages) {
+      if (!m.timestamp) continue;
+      const dateStr = m.timestamp.slice(0, 10);
+      let bucket = dailyByDate.get(dateStr);
+      if (!bucket) {
+        bucket = [];
+        dailyByDate.set(dateStr, bucket);
+      }
+      bucket.push(m);
+    }
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    model,
+    messages,
+    dailyByDate,
+  };
 }
 
 /**
